@@ -11,14 +11,12 @@ interface Recipe {
 
 interface Ingredient {
   id: string;
-  recipe_id: string;
   name: string;
   position: number;
 }
 
 interface Step {
   id: string;
-  recipe_id: string;
   description: string;
   position: number;
 }
@@ -31,7 +29,7 @@ export default function App() {
   const [steps, setSteps] = useState<Record<string, Step[]>>({});
   const [url, setUrl] = useState("");
 
-  // Alle Rezepte laden
+  // Alle Rezepte aus Supabase laden
   useEffect(() => {
     const fetchRecipes = async () => {
       const { data: recipeData, error } = await supabase
@@ -72,48 +70,33 @@ export default function App() {
     if (!url) return;
 
     try {
-      const resp = await fetch(
-        `http://localhost:3001/proxy?url=${encodeURIComponent(url)}`
-      );
+      // Proxy-URL relativ, damit Port egal ist
+      const resp = await fetch(`/proxy?url=${encodeURIComponent(url)}`);
 
       if (!resp.ok) throw new Error(`Proxy-Status: ${resp.status}`);
-      const html = await resp.text(); // <-- WICHTIG: jetzt text statt json
 
-      // Titel aus <title>
-      const titleMatch = html.match(/<title>(.*?)<\/title>/i);
-      const title = (titleMatch?.[1] || "Unbekanntes Rezept").trim();
-
-      // Dummy-Beschreibung
-      const description = `Importiert von ${url}`;
-
-      // Open Graph Bild extrahieren
-      const ogImgMatch = html.match(
-        /<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i
-      );
-      const image_url = ogImgMatch?.[1] || null;
-
-      // In Supabase speichern
-      const { data, error } = await supabase
-        .from("recipes")
-        .insert([{ title, description, image_url, servings: null }])
-        .select();
-
-      if (error) {
-        console.error("Fehler beim Speichern in Supabase:", error);
-        alert("Fehler beim Speichern in Supabase");
-        return;
+      const contentType = resp.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error("Ungültige Antwort vom Proxy (kein JSON)");
       }
 
-      // State aktualisieren
-      if (data && data.length > 0) {
-        setRecipes((prev) => [data[0], ...prev]);
-      }
+      const data = await resp.json();
+
+      if (!data.recipe) throw new Error("Kein Rezept zurückbekommen");
+
+      // Neues Rezept hinzufügen
+      setRecipes((prev) => [data.recipe, ...prev]);
+      setIngredients((prev) => ({
+        ...prev,
+        [data.recipe.id]: data.ingredients,
+      }));
+      setSteps((prev) => ({ ...prev, [data.recipe.id]: data.steps }));
 
       setUrl("");
       alert("Rezept erfolgreich importiert!");
     } catch (err) {
       console.error("Import-Fehler:", err);
-      alert("Fehler beim Importieren. Details in der Konsole.");
+      alert(`Fehler beim Importieren: ${err}`);
     }
   };
 

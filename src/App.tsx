@@ -1,4 +1,3 @@
-// src/App.tsx
 import { useState, useEffect } from "react";
 import { supabase } from "./lib/supabaseClient";
 
@@ -8,32 +7,67 @@ interface Recipe {
   description: string | null;
   image_url: string | null;
   servings: number | null;
-  created_at?: string;
+}
+
+interface Ingredient {
+  id: string;
+  recipe_id: string;
+  name: string;
+  position: number;
+}
+
+interface Step {
+  id: string;
+  recipe_id: string;
+  description: string;
+  position: number;
 }
 
 export default function App() {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [ingredients, setIngredients] = useState<Record<string, Ingredient[]>>(
+    {}
+  );
+  const [steps, setSteps] = useState<Record<string, Step[]>>({});
   const [url, setUrl] = useState("");
 
-  // Rezepte aus Supabase laden
+  // Alle Rezepte laden
   useEffect(() => {
     const fetchRecipes = async () => {
-      const { data, error } = await supabase
+      const { data: recipeData, error } = await supabase
         .from("recipes")
-        .select("id, title, description, image_url, servings, created_at")
+        .select("id, title, description, image_url, servings")
         .order("created_at", { ascending: false });
 
       if (error) {
-        console.error("Fehler beim Laden:", error);
+        console.error("Fehler beim Laden der Rezepte:", error);
       } else {
-        setRecipes(data || []);
+        setRecipes(recipeData || []);
       }
     };
 
     fetchRecipes();
   }, []);
 
-  // Rezept von externer URL importieren (via Proxy)
+  // Zutaten + Schritte für ein Rezept laden
+  const fetchDetails = async (recipeId: string) => {
+    const { data: ingData } = await supabase
+      .from("ingredients")
+      .select("*")
+      .eq("recipe_id", recipeId)
+      .order("position");
+
+    const { data: stepData } = await supabase
+      .from("steps")
+      .select("*")
+      .eq("recipe_id", recipeId)
+      .order("position");
+
+    setIngredients((prev) => ({ ...prev, [recipeId]: ingData || [] }));
+    setSteps((prev) => ({ ...prev, [recipeId]: stepData || [] }));
+  };
+
+  // Rezept von URL importieren
   const handleImport = async () => {
     if (!url) return;
 
@@ -43,16 +77,16 @@ export default function App() {
       );
 
       if (!resp.ok) throw new Error(`Proxy-Status: ${resp.status}`);
-      const html = await resp.text();
+      const html = await resp.text(); // <-- WICHTIG: jetzt text statt json
 
       // Titel aus <title>
       const titleMatch = html.match(/<title>(.*?)<\/title>/i);
       const title = (titleMatch?.[1] || "Unbekanntes Rezept").trim();
 
-      // Beschreibung als Fallback
+      // Dummy-Beschreibung
       const description = `Importiert von ${url}`;
 
-      // Bild via Open Graph
+      // Open Graph Bild extrahieren
       const ogImgMatch = html.match(
         /<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i
       );
@@ -61,33 +95,25 @@ export default function App() {
       // In Supabase speichern
       const { data, error } = await supabase
         .from("recipes")
-        .insert([
-          {
-            title,
-            description,
-            image_url,
-            servings: null,
-          },
-        ])
+        .insert([{ title, description, image_url, servings: null }])
         .select();
 
       if (error) {
-        console.error("Fehler beim Speichern:", error);
+        console.error("Fehler beim Speichern in Supabase:", error);
         alert("Fehler beim Speichern in Supabase");
         return;
       }
 
-      alert("Rezept erfolgreich importiert!");
-
-      // neu eingefügtes Rezept direkt ins UI pushen
-      if (data) {
-        setRecipes((prev) => [...data, ...prev]);
+      // State aktualisieren
+      if (data && data.length > 0) {
+        setRecipes((prev) => [data[0], ...prev]);
       }
 
       setUrl("");
+      alert("Rezept erfolgreich importiert!");
     } catch (err) {
       console.error("Import-Fehler:", err);
-      alert("Fehler beim Importieren der URL");
+      alert("Fehler beim Importieren. Details in der Konsole.");
     }
   };
 
@@ -101,7 +127,7 @@ export default function App() {
           type="url"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://thehiddenveggies.com/savory-vegan-muffins/"
+          placeholder="https://example.com/rezept-url"
           style={{ width: "500px", marginRight: "8px" }}
           required
         />
@@ -116,8 +142,8 @@ export default function App() {
             border: "1px solid #ddd",
             borderRadius: 8,
             padding: 16,
-            marginBottom: 12,
-            maxWidth: 420,
+            marginBottom: 20,
+            maxWidth: 600,
           }}
         >
           <h3>{r.title}</h3>
@@ -128,8 +154,39 @@ export default function App() {
               style={{ width: "100%", borderRadius: 8 }}
             />
           )}
-          {r.description && <p style={{ marginTop: 8 }}>{r.description}</p>}
+          {r.description && <p>{r.description}</p>}
           {r.servings != null && <p>Portionen: {r.servings}</p>}
+
+          <button
+            style={{ marginTop: "10px" }}
+            onClick={() => fetchDetails(r.id)}
+          >
+            Zutaten & Schritte laden
+          </button>
+
+          {/* Zutaten */}
+          {ingredients[r.id] && (
+            <div style={{ marginTop: "1rem" }}>
+              <h4>Zutaten</h4>
+              <ul>
+                {ingredients[r.id].map((ing) => (
+                  <li key={ing.id}>{ing.name}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Schritte */}
+          {steps[r.id] && (
+            <div style={{ marginTop: "1rem" }}>
+              <h4>Zubereitung</h4>
+              <ol>
+                {steps[r.id].map((s) => (
+                  <li key={s.id}>{s.description}</li>
+                ))}
+              </ol>
+            </div>
+          )}
         </div>
       ))}
     </div>
